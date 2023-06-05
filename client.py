@@ -12,7 +12,6 @@ from pynput.mouse import Button, Listener as Mouse_listener
 import tkinter as tk
 from tkinter.font import Font
 from tkinter import ttk, messagebox, filedialog
-import connection_common
 import win32api
 import datetime
 import pygame
@@ -24,6 +23,68 @@ import time
 import shutil
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import tkinter.dnd as dnd
+import sys
+from PIL import Image
+
+# Receive data as chunks and rebuild message.
+import time
+def data_recive(socket, size_of_header, chunk_prev_message, buffer_size=65536):
+    # print(socket,"--socket")
+    prev_buffer_size = len(chunk_prev_message)
+    headerMsg = bytes()
+    # print(f'headerMsg {headerMsg}')
+    if prev_buffer_size < size_of_header:
+            headerMsg = socket.recv(size_of_header - prev_buffer_size)
+
+            if len(headerMsg) != size_of_header:
+                headerMsg = chunk_prev_message + headerMsg
+                chunk_prev_message = bytes()
+
+    elif prev_buffer_size >= size_of_header:
+        headerMsg = chunk_prev_message[:size_of_header]
+        chunk_prev_message = chunk_prev_message[size_of_header:]
+    
+    global msgSize,newMsg
+    try:   
+        msgSize = int(headerMsg.decode())
+        # print(f'msgSize {msgSize}')
+        newMsg = chunk_prev_message
+        # print(f'newMsg {newMsg}')
+        chunk_prev_message = bytes()
+    except (ValueError):
+        pass    
+
+    if msgSize:
+        while True:
+            if len(newMsg) < msgSize:
+                newMsg += socket.recv(buffer_size)
+            elif len(newMsg) > msgSize:
+                chunk_prev_message = newMsg[msgSize:]
+                newMsg = newMsg[:msgSize]
+            if len(newMsg) == msgSize:
+                break
+        return newMsg, chunk_prev_message
+    else:
+        return None
+
+#Send data 
+def send_data(socket, size_of_header, msg_data):
+    msg_len = len(msg_data)
+    if msg_len:
+        header = f"{msg_len:<{size_of_header}}"
+        # time.sleep(5)
+        socket.send(bytes(header, "utf-8") + msg_data)  
+
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 
 def show_frame(frame):
@@ -31,7 +92,7 @@ def show_frame(frame):
 
     
 def send_event(sock,message):
-    connection_common.send_data(sock, 2, message)
+    send_data(sock, 2, message)
     
     
 def mouse_controlling(sock, event_queue, resize, cli_width, cli_height, disp_width, disp_height):
@@ -121,7 +182,7 @@ def receive_and_put_in_list(client_socket, jpeg_list):
     print('inside recive and put in list function')
     try:
         while True:
-            message = connection_common.data_recive(client_socket, size_of_header, chunk_prev_message)
+            message = data_recive(client_socket, size_of_header, chunk_prev_message)
             if message:
                 jpeg_list.put(lz4.frame.decompress(message[0])) 
                 chunk_prev_message = message[1]
@@ -192,12 +253,12 @@ def cleanup_process():
 
 def cleanup_display_process(status_list):
     if status_list.get() == "stop":
-        connection_common.send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("stop_capture", "utf-8"))
+        send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("stop_capture", "utf-8"))
         print("inside cleaup display process")
         cleanup_process()
 
 
-def compute_resolution(cli_width, cli_height, ser_width, ser_height):
+def computer_resolution(cli_width, cli_height, ser_width, ser_height):
     resolution_tuple = ((7680, 4320), (3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1366, 768), (1280, 720),(1024, 768), (960, 720), (800, 600), (640, 480))
     if cli_width >= ser_width or cli_height >= ser_height:
         for resolution in resolution_tuple:
@@ -210,35 +271,28 @@ def compute_resolution(cli_width, cli_height, ser_width, ser_height):
         return cli_width, cli_height
 
 
-
 def remote_display():
     global thread2, mouse_listner,keyboard_listner, process1, process2, remote_server_socket, mouse_event  
     print("Send start message")
-    connection_common.send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("start_capture", "utf-8"))
+    send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("start_capture", "utf-8"))
     print("Start message sent")
     disable_choice = messagebox.askyesno("Remote Box", "Disable remote device wallpaper?(yes,Turn black)")
 
     remote_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)     # remote display sockets
     remote_server_socket.connect((server_ip, 1234))
     
-    connection_common.send_data(remote_server_socket, HEADER_COMMAND_SIZE, bytes(str(disable_choice), "utf-8"))
+    send_data(remote_server_socket, HEADER_COMMAND_SIZE, bytes(str(disable_choice), "utf-8"))
     print("\n")
     print(f">>Now you can CONTROL remote desktop")
     resize_option = False
     server_width, server_height = ImageGrab.grab().size
-    client_resolution = connection_common.data_recive(remote_server_socket, 2, bytes(), 1024)[0].decode("utf-8")
+    client_resolution = data_recive(remote_server_socket, 2, bytes(), 1024)[0].decode("utf-8")
     print("Received client_resolution :", client_resolution)
     client_width, client_height = client_resolution.split(",")
 
-    display_width, display_height = compute_resolution(int(client_width), int(client_height), server_width,
+    display_width, display_height = computer_resolution(int(client_width), int(client_height), server_width,
                                                                    server_height)
-    try:
-     client_width, client_height = client_resolution.split(",")
-    except ValueError:
-     client_width, client_height = 1920,1020 
-        
-    display_width, display_height = int(client_width), int(client_height)
-
+   
     if (client_width, client_height) != (display_width, display_height):
         resize_option = True
 
@@ -279,6 +333,7 @@ def reset_ui():
     password_entry.delete(0, "end")
     # access_button_frame.grid_forget()
 
+
 def login_to_connect():
     global command_server_socket, remote_server_socket, thread1, server_ip, file_server_socket, f_thread, chat_server_socket
     if messagebox.askquestion("Connection Request", "Do you want to connect?") == 'yes':
@@ -291,8 +346,8 @@ def login_to_connect():
                 command_server_socket.connect((server_ip, 1234))
                 server_password = bytes(server_password, "utf-8")
 
-                connection_common.send_data(command_server_socket, 2, server_password)
-                connect_response = connection_common.data_recive(command_server_socket, 2, bytes(), 1024)[0].decode("utf-8")
+                send_data(command_server_socket, 2, server_password)
+                connect_response = data_recive(command_server_socket, 2, bytes(), 1024)[0].decode("utf-8")
                 print(connect_response, "connect_response")
 
                 if connect_response != "1":
@@ -337,6 +392,7 @@ def login_to_connect():
         else:
             print("Password is not 6 characters")
 
+
 def is_password_expired():
     global command_server_socket,remote_server_socket,thread1,server_ip,file_server_socket,f_thread,chat_server_socket,password_entered_time
     if password_entered_time is not None:
@@ -354,6 +410,7 @@ def is_password_expired():
             f_thread = None
             chat_server_socket = None
             password_entered_time = None
+
 
 def check_password_expiration():
     while True:
@@ -374,7 +431,7 @@ def disconnect(btn_caller):
     if btn_caller == "button":
         result = messagebox.askquestion("Disconnect", "Are you sure you want to disconnect?")
         if result == 'yes':
-            connection_common.send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("disconnect", "utf-8"))
+            send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("disconnect", "utf-8"))
         else:
             return
     
@@ -395,7 +452,7 @@ def listen_for_commands():
     listen = True
     try:
         while listen:
-            message = connection_common.data_recive(command_server_socket, HEADER_COMMAND_SIZE, bytes(), 1024)[0].decode("utf-8")
+            message = data_recive(command_server_socket, HEADER_COMMAND_SIZE, bytes(), 1024)[0].decode("utf-8")
             if message == "disconnect":
                 listen = False
                
@@ -408,27 +465,35 @@ def listen_for_commands():
         disconnect("message")
         print("Thread automatically exit")
 
+
 def file_path_listbox(event):
     listbox.insert(tk.END, event.data)
 
+
+forbidden_extensions = [".exe", ".dll"]
+
 def send_files():
-    # global listbox
     selected_indices = listbox.curselection()
     if selected_indices:
         files = [listbox.get(index) for index in selected_indices]
         print(f"Sending files: {files}")
 
         for file in files:
-            print(file)
-
-            # Send file data over the socket
-           
             filename = os.path.basename(file)
+            extension = os.path.splitext(filename)[1].lower()
+            
+            if extension in forbidden_extensions:
+                # Ask for confirmation to send forbidden file types
+                result = messagebox.askquestion("Send File", f"Are you sure you want to send the file: {filename}?\nSending forbidden file types (.exe, .dll) can be risky.")
+                if result != "yes":
+                    print(f"Skipping file: {filename}")
+                    continue
+            
             file_server_socket.send(filename.encode())
 
-                # Send the file
+            # Send the file
             with open(file, "rb") as file:
-                 while True:
+                while True:
                     data = file.read(1024)
                     if not data:
                         break
@@ -438,14 +503,16 @@ def send_files():
         print("All files sent.")
     else:
         print("No files selected.")
-        messagebox.showwarning("No File Selected", "Please select at least one file to send.")
+        messagebox.showwarning("No File Selected", "Please select at least one file to send.")   
+   
         
 def browse_file():
     file_path = filedialog.askopenfilename()
     if file_path:
         listbox.insert(tk.END, file_path)
-        file_server_socket.send(file_path)
-
+        # file_server_socket.send(file_path)
+        
+        
 def ui_file():
     global window_file,listbox
     window_file = TkinterDnD.Tk()
@@ -488,12 +555,12 @@ def ui_file():
     button_frame = tk.Frame(window_file,bg="#8A8A8A")
     button_frame.pack(pady=10)
     
-    connection_common.send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("start_file_explorer", "utf-8"))
-    select_file_process = Process(target=browse_file,  name="select_file_process", daemon=True)
-    select_file_process.start()
+    send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("start_file_explorer", "utf-8"))
+    # select_file_process = Process(target=browse_file,  name="select_file_process", daemon=True)
+    # select_file_process.start()
     
-    send_file_process = Thread(target=send_files, name="send_file_process", daemon=True)
-    send_file_process.start()
+    # send_file_process = Thread(target=send_files, name="send_file_process", daemon=True)
+    # send_file_process.start()
     
     send_button = tk.Button(button_frame, text="Send Files", command=send_files ,compound=tk.TOP, bg="#8A8A8A", activebackground='#808080',activeforeground="white")
     send_button.pack(side=tk.LEFT, padx=0)
@@ -523,7 +590,7 @@ def ui_file():
 #         if msg and msg.strip() != "":
 #             text_display.delete(0, "end")
 #             text_chat_tab.tag_configure("red", foreground="red")
-#             connection_common.send_data(chat_server_socket, CHAT_HEADER_SIZE, bytes(msg, "utf-8"))
+#             send_data(chat_server_socket, CHAT_HEADER_SIZE, bytes(msg, "utf-8"))
 #             add_chat_display(msg, LOCAL_NAME)
 #     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
 #         print(e.strerror)
@@ -532,7 +599,7 @@ def ui_file():
 # def receive_message():
 #     try:
 #         while True:
-#             msg = connection_common.data_recive(chat_server_socket, CHAT_HEADER_SIZE, bytes())[0].decode("utf-8")
+#             msg = data_recive(chat_server_socket, CHAT_HEADER_SIZE, bytes())[0].decode("utf-8")
 #             text_chat_tab.tag_configure("green", foreground="green")
 #             add_chat_display(msg, REMOTE_NAME)
 #     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
@@ -541,11 +608,10 @@ def ui_file():
 #         pass
 
 
-
 def remote_display_screen():
     global thread2, process1, process2, remote_server_socket 
     print("Send start message")
-    connection_common.send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("screen_sharing", "utf-8"))
+    send_data(command_server_socket, HEADER_COMMAND_SIZE, bytes("screen_sharing", "utf-8"))
     print("Start message sent")
     remote_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)     # remote display sockets
     remote_server_socket.connect((server_ip, 1234))
@@ -553,19 +619,12 @@ def remote_display_screen():
     print(f">>Now you can SHARE SCREEN to remote desktop")
     resize_option = False
     server_width, server_height = ImageGrab.grab().size
-    client_resolution = connection_common.data_recive(remote_server_socket, 2, bytes(), 1024)[0].decode("utf-8")
+    client_resolution = data_recive(remote_server_socket, 2, bytes(), 1024)[0].decode("utf-8")
     print("Received client_resolution :", client_resolution)
     client_width, client_height = client_resolution.split(",")
 
-    display_width, display_height = compute_resolution(int(client_width), int(client_height), server_width,
+    display_width, display_height = computer_resolution(int(client_width), int(client_height), server_width,
                                                                    server_height)
-    try:
-     client_width, client_height = client_resolution.split(",")
-    except ValueError:
-     client_width, client_height = 1920,1020 
-
-        
-    display_width, display_height = int(client_width), int(client_height)
 
     if (client_width, client_height) != (display_width, display_height):
         resize_option = True
@@ -614,12 +673,13 @@ if __name__ == "__main__":
     root = tk.Tk()
     # root.geometry('1900x1050')
     root.title("Remote Access Desktop Application")
-    root.iconphoto(True,tk.PhotoImage(file='assets/images/img/m_logo.png'))
-    # root.state('zoomed')
-    root.resizable(False, False)
+    # root.iconphoto(True,tk.PhotoImage(file='assets/images/img/m_logo'))
+    root.iconbitmap("m_logo.ico")
+    root.state('zoomed')
+    # root.resizable(False, False)
 
-    # root.rowconfigure(0, weight=1)
-    # root.columnconfigure(0, weight=1)
+    root.rowconfigure(0, weight=1)
+    root.columnconfigure(0, weight=1)
 
     frame1 = tk.Frame(root)
     frame2 = tk.Frame(root)
@@ -633,16 +693,13 @@ if __name__ == "__main__":
         
     #==================Frame 1 code=======================
     # Set the background image
-    # img = Image.open('assets/images/images/leone-venter-VieM9BdZKFo-unsplash.png')
-    # resized_image = img.resize((1920, 1020), Image.LANCZOS)
-    img = tk.PhotoImage(file='assets/images/images/leone-venter-VieM9BdZKFo-unsplash.png')
-    # resized_image = img.resize((1920, 1020), Image.LANCZOS)
+    # img = tk.PhotoImage(file='assets/images/images/leone-venter-VieM9BdZKFo-unsplash.png')
+    img = Image.open('assets/images/images/leone-venter-VieM9BdZKFo-unsplash.png')
+    resized_image = img.resize((1920, 1020), Image.LANCZOS)
 
     # Convert the resized image to PhotoImage
-    # new_image = ImageTk.PhotoImage(img)
-
-    # Create a label with the new_image
-    label = tk.Label(frame1, image=img, background='#f2f2f2')
+    new_image = ImageTk.PhotoImage(resized_image)
+    label = tk.Label(frame1, image=new_image, background='#f2f2f2')
     label.place(x=0, y=0, relwidth=1, relheight=1)
 
     logo_image = tk.PhotoImage(file='assets/images/img/multispan-logo.png')

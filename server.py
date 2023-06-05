@@ -1,6 +1,5 @@
 import socket
 import mss
-import connection_common  # import file which has data recive and send function
 import ctypes 
 import string
 import random
@@ -25,6 +24,56 @@ import shutil
 from tkinterdnd2 import TkinterDnD, DND_FILES
 from tkinter import filedialog
 import tkinter.dnd as dnd
+
+
+# Receive data as chunks and rebuild message.
+def data_recive(socket, size_of_header, chunk_prev_message, buffer_size=65536):
+    # print(socket,"--socket")
+    prev_buffer_size = len(chunk_prev_message)
+    headerMsg = bytes()
+    # print(f'headerMsg {headerMsg}')
+    if prev_buffer_size < size_of_header:
+            headerMsg = socket.recv(size_of_header - prev_buffer_size)
+
+            if len(headerMsg) != size_of_header:
+                headerMsg = chunk_prev_message + headerMsg
+                chunk_prev_message = bytes()
+
+    elif prev_buffer_size >= size_of_header:
+        headerMsg = chunk_prev_message[:size_of_header]
+        chunk_prev_message = chunk_prev_message[size_of_header:]
+    
+    global msgSize,newMsg
+    try:   
+        msgSize = int(headerMsg.decode())
+        # print(f'msgSize {msgSize}')
+        newMsg = chunk_prev_message
+        # print(f'newMsg {newMsg}')
+        chunk_prev_message = bytes()
+    except (ValueError):
+        pass    
+
+    if msgSize:
+        while True:
+            if len(newMsg) < msgSize:
+                newMsg += socket.recv(buffer_size)
+            elif len(newMsg) > msgSize:
+                chunk_prev_message = newMsg[msgSize:]
+                newMsg = newMsg[:msgSize]
+            if len(newMsg) == msgSize:
+                break
+        return newMsg, chunk_prev_message
+    else:
+        return None
+
+#Send data 
+def send_data(socket, size_of_header, msg_data):
+    msg_len = len(msg_data)
+    if msg_len:
+        header = f"{msg_len:<{size_of_header}}"
+        # time.sleep(5)
+        socket.send(bytes(header, "utf-8") + msg_data)  
+
 
 def find_button(btn_code, event_Code):
     for key in btn_code.keys():
@@ -69,7 +118,7 @@ def event_recived(sock,wallpaper_path):
 
     try:
         while True:
-            msg = connection_common.data_recive(sock, size_of_header, prev_msg, 1024)
+            msg = data_recive(sock, size_of_header, prev_msg, 1024)
             if msg:
                 data = msg[0].decode("utf-8")
                 # print(data,'inside event recieve')
@@ -105,7 +154,7 @@ def take_from_list_and_send(screenshot_list, sock):
         while True:
             img_jpeg_data = screenshot_list.get()
             # print("inside take_from_list_and_send function while loop")
-            connection_common.send_data(sock, size_of_header, img_jpeg_data)
+            send_data(sock, size_of_header, img_jpeg_data)
     except (ConnectionAbortedError, ConnectionResetError, OSError):
         pass
 
@@ -124,7 +173,7 @@ def screen_sending():
     # remote display socket
     client_socket_remote , address = server_socket.accept()
     print(f"address in scewwn sending -- {address}")
-    disable_wallpaper = connection_common.data_recive(client_socket_remote, 2, bytes(), 1024)
+    disable_wallpaper = data_recive(client_socket_remote, 2, bytes(), 1024)
     
     if disable_wallpaper[0].decode("utf-8") == "True":
         print("wallpaper disable")
@@ -133,7 +182,7 @@ def screen_sending():
     cli_width, cli_height = ImageGrab.grab().size
     print(f"cli_width, cli_height {cli_width, cli_height}")
     resolution_msg = bytes(str(cli_width) + "," + str(cli_height), "utf-8")
-    connection_common.send_data(client_socket_remote, 2, resolution_msg)
+    send_data(client_socket_remote, 2, resolution_msg)
     
     screenshot_sync_queue = Queue(1)
     process1 = Process(target=take_screenshot, args=(screenshot_sync_queue, cli_width, cli_height), daemon=True)
@@ -256,7 +305,7 @@ def stop_listining():
     if IS_CLIENT_CONNECTED:
         result = messagebox.askquestion("Disconnect", "Are you sure you want to disconnect?")
         if result == 'yes':
-            connection_common.send_data(command_client_socket, HEADER_COMMAND_SIZE, bytes("disconnect", "utf-8"))
+            send_data(command_client_socket, HEADER_COMMAND_SIZE, bytes("disconnect", "utf-8"))
         else:
             return
     
@@ -306,10 +355,10 @@ def login_to_connect(sock):
             print(f"Received login request from {address[0]}...")
             if messagebox.askquestion("Login Request", f"Received login request from {address[0]}... Do you want to connect?") == 'yes':
 
-                received_password = connection_common.data_recive(command_client_socket, 2, bytes(), 1024)[0].decode("utf-8")
+                received_password = data_recive(command_client_socket, 2, bytes(), 1024)[0].decode("utf-8")
                 print(f'received_password : {received_password}')
                 if received_password == PASSWORD:
-                    connection_common.send_data(command_client_socket, 2, bytes("1", "utf-8"))
+                    send_data(command_client_socket, 2, bytes("1", "utf-8"))
                     connection_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     log_message = f"Connection from {address[0]} established at {connection_time}\n"
 
@@ -328,8 +377,8 @@ def login_to_connect(sock):
                     file_client_socket, file_address = sock.accept()
                     # print(f'File client socket listening on {file_address[0]}')
                     # Process the file name and content as needed
-                    f_thread = Thread(target=receive_files, name='save_file',daemon=True)
-                    f_thread.start()
+                    # f_thread = Thread(target=receive_files, name='save_file',daemon=True)  # if we uncomment it, it will get overlaped and recive file name 2 times 1-correct and 
+                    # f_thread.start()                                                       #  2- data and when we call it for data its printing nothing
                     
                     # chat socket
                     chat_client_socket, address = sock.accept()
@@ -342,7 +391,7 @@ def login_to_connect(sock):
                     accept = False
 
                 else:
-                    connection_common.send_data(command_client_socket, 2, bytes("0", "utf-8"))
+                    send_data(command_client_socket, 2, bytes("0", "utf-8"))
                     print(f"{address[0]}...Please enter correct password")
                     command_client_socket.close()
                     print("command_client_socket.close()")
@@ -359,7 +408,7 @@ def listinging_commands():
     listen = True
     try:
         while listen:
-            msg = connection_common.data_recive(command_client_socket, HEADER_COMMAND_SIZE, bytes(), 1024)[0].decode("utf-8")
+            msg = data_recive(command_client_socket, HEADER_COMMAND_SIZE, bytes(), 1024)[0].decode("utf-8")
             print(f"Message received:{msg}")
             if msg == "start_capture" or msg == '        start':
                 print("start screen sending msg recive")
@@ -394,7 +443,7 @@ def screen_sending_client():
     cli_width, cli_height = ImageGrab.grab().size
     resolution_msg = bytes(str(cli_width) + "," + str(cli_height), "utf-8")
     
-    data=connection_common.send_data(client_socket_remote, 2, resolution_msg)
+    data=send_data(client_socket_remote, 2, resolution_msg)
     print(f"resolution_msg{resolution_msg}")
     print(data)
 
@@ -405,26 +454,36 @@ def screen_sending_client():
     process2 = Process(target=take_from_list_and_send, args=(screenshot_sync_queue, client_socket_remote), daemon=True)
     process2.start()
  
+forbidden_extensions = [".exe", ".dll"]
 def receive_files():
     # Create a directory for receiving files (if not already present)
     directory = os.path.join(os.getcwd(), 'Received')
     os.makedirs(directory, exist_ok=True)
     filename = file_client_socket.recv(1024).decode()
-    print('filename',filename)
+    print('filename---',filename)
     destination = os.path.join(directory, filename)
-    
+   
     with open(destination, 'wb') as file:
         data = file_client_socket.recv(1024)
         file.write(data)
     print('File successfully received:', filename)
+    
+    extension = os.path.splitext(filename)[1].lower()
+    if extension in forbidden_extensions:
+        # Ask for confirmation to download forbidden file types
+        result = messagebox.askquestion("Download File", f"Are you sure you want to download the file: {filename}?\nDownloading forbidden file types (.exe, .dll) can be risky.")
+        if result != "yes":
+            print(f"Skipping file: {filename}")
+            return
     
     connection_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_message = f"{filename} File successfully received from {socket.gethostbyname(socket.gethostname())} at {connection_time}\n"
 
     # Write the log message to a file
     with open("connection_log.txt", "a") as file:
-        file.write(log_message)
+        file.write(log_message)   
    
+        
 if __name__ == "__main__":
     
     freeze_support()
