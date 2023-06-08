@@ -15,7 +15,7 @@ from tkinter import ttk, messagebox, filedialog
 import win32api
 import datetime
 import pygame
-from tkinter import filedialog , StringVar
+from tkinter import filedialog , StringVar,scrolledtext
 from tkinter import ttk
 import os
 from tkinterdnd2 import *
@@ -24,10 +24,14 @@ import shutil
 from tkinterdnd2 import TkinterDnD, DND_FILES
 import tkinter.dnd as dnd
 import sys
+import webbrowser
+import re
 from PIL import Image
+from datetime import datetime
+from os.path import exists
+import sqlite3
 
 # Receive data as chunks and rebuild message.
-import time
 def data_recive(socket, size_of_header, chunk_prev_message, buffer_size=65536):
     # print(socket,"--socket")
     prev_buffer_size = len(chunk_prev_message)
@@ -195,29 +199,51 @@ def receive_and_put_in_list(client_socket, jpeg_list):
 
 
 def display_data(jpeg_list, status_list, disp_width, disp_height, resize):
+    # Hide the Pygame support prompt
     os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-    pygame.init()
+
+    pygame.init()   # Initialize Pygame
+    
     display_surface = pygame.display.set_mode((disp_width, disp_height))
-    pygame.display.set_caption(f"Remote Desktop")
-    clock = pygame.time.Clock()
-    display = True
+    pygame.display.set_caption(f"Remote Desktop") # Set the window caption
+    clock = pygame.time.Clock()   # Create a clock object to control the frame rate
+
+    display = True     # Set the initial display flag
+
     print("inside display data function")
+    # Main loop for updating the display
     while display:
-        for event in pygame.event.get():
+        
+        for event in pygame.event.get():   # Check for Pygame events
+            # If the QUIT event is triggered (user closes the window)
             if event.type == pygame.QUIT:
-                status_list.put("stop")  
-                pygame.quit()
+                # Put "stop" into the status_list to signal the termination of the function
+                status_list.put("stop")
+                pygame.quit()  # Clean up Pygame resources
                 return
+
+        # Retrieve JPEG data from the jpeg_list
         jpeg_buffer = BytesIO(jpeg_list.get())
+
+        # Open the JPEG image using PIL
         img = Image.open(jpeg_buffer)
+
+        # Convert the PIL image to a Pygame surface
         py_image = pygame.image.frombuffer(img.tobytes(), img.size, img.mode)
+
+        # If resize flag is True, resize the py_image to fit the display surface
         if resize:
             py_image = pygame.transform.scale(py_image, (disp_width, disp_height))
-        jpeg_buffer.close()
+
+        jpeg_buffer.close()  # Close the JPEG buffer
+
+        # Draw the py_image onto the display surface at coordinates (0, 0)
         display_surface.blit(py_image, (0, 0))
+        
+       # Update the display
         pygame.display.flip()
-        clock.tick(60)
-    
+        clock.tick(60) # Control the frame rate (targeting 60 FPS)
+        
         
 def capture_screen(queue,disp_width,disp_height):
     print("inside capture screen function")
@@ -290,8 +316,7 @@ def remote_display():
     print("Received client_resolution :", client_resolution)
     client_width, client_height = client_resolution.split(",")
 
-    display_width, display_height = computer_resolution(int(client_width), int(client_height), server_width,
-                                                                   server_height)
+    display_width, display_height = computer_resolution(int(client_width), int(client_height), server_width,  server_height)
    
     if (client_width, client_height) != (display_width, display_height):
         resize_option = True
@@ -331,7 +356,6 @@ def reset_ui():
     password_entry.configure(state="normal")
     connect_button.configure(state="normal")
     password_entry.delete(0, "end")
-    # access_button_frame.grid_forget()
 
 
 def login_to_connect():
@@ -354,13 +378,18 @@ def login_to_connect():
                     print("Wrong Password Entered...!")
                 else:
                     password_entered_time = time.time()
-                    # label_status.grid()
                     thread1 = Thread(target=listen_for_commands, daemon=True)
                     thread1.start()
+                    connection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    log_message = f"Connection from {server_ip} established at {connection_time}\n"
+                     # Write the log message to a file
+                    with open("client_connection_log.txt", "a") as file:
+                        file.write(log_message)
 
+                    
                     print("\n")
                     print("Connected to the remote desktop...!")
-
+         
                     name_entry.configure(state="disabled")
                     password_entry.configure(state="disabled")
                     connect_button.configure(state="disabled")
@@ -377,8 +406,8 @@ def login_to_connect():
                     chat_server_socket.connect((server_ip, 1234))
                     
                     # thread for chat
-                    # recv_chat_msg_thread = Thread(target=receive_message, name="recv_chat_msg_thread", daemon=True)
-                    # recv_chat_msg_thread.start()
+                    recv_chat_msg_thread = Thread(target=receive_message, name="recv_chat_msg_thread", daemon=True)
+                    recv_chat_msg_thread.start()
                     
                     
                     show_frame(frame2)
@@ -387,7 +416,6 @@ def login_to_connect():
                     # disconnect_button.configure(state="normal")  # Enable
 
             except OSError as e:
-                # label_status.grid_remove()
                 print(e.strerror)
         else:
             print("Password is not 6 characters")
@@ -398,8 +426,8 @@ def is_password_expired():
     if password_entered_time is not None:
         elapsed_time = time.time() - password_entered_time
         if elapsed_time >= 30 * 60: # 30min elapsed_time >= 30 * 60: # 30min
+            print("Password expired")
             messagebox.showinfo("Password Expired", "Your password has expired. Please login again.")
-            # reset_ui()
             root.destroy()
             # Reset the global variables
             command_server_socket = None
@@ -420,7 +448,7 @@ def check_password_expiration():
 
 def close_sockets():
     # service_socket_list = [command_server_socket, remote_server_socket,file_server_socket]
-    service_socket_list = [command_server_socket, remote_server_socket,file_server_socket]
+    service_socket_list = [command_server_socket, remote_server_socket,file_server_socket,chat_server_socket]
     for sock in service_socket_list:
         if sock:
             sock.close()
@@ -461,7 +489,6 @@ def listen_for_commands():
     except ValueError:
         pass
     finally:
-        # label_status.grid_remove()
         disconnect("message")
         print("Thread automatically exit")
 
@@ -501,10 +528,17 @@ def send_files():
             print(f"File sent: {file}")
 
         print("All files sent.")
+        connection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_message = f"{filename} File successfully sent at {connection_time}\n"
+
+        # Write the log message to a file
+        with open("client_connection_log.txt", "a") as file:
+            file.write(log_message) 
     else:
         print("No files selected.")
         messagebox.showwarning("No File Selected", "Please select at least one file to send.")   
-   
+
+
         
 def browse_file():
     file_path = filedialog.askopenfilename()
@@ -561,9 +595,9 @@ def ui_file():
     
     # send_file_process = Thread(target=send_files, name="send_file_process", daemon=True)
     # send_file_process.start()
-    
     send_button = tk.Button(button_frame, text="Send Files", command=send_files ,compound=tk.TOP, bg="#8A8A8A", activebackground='#808080',activeforeground="white")
     send_button.pack(side=tk.LEFT, padx=0)
+    
 
     browse_button = tk.Button(button_frame, text="Browse File", command=browse_file,compound=tk.TOP,bg="#8A8A8A", activebackground='#808080',activeforeground="white")
     browse_button.pack(side=tk.LEFT, padx=0)
@@ -571,43 +605,6 @@ def ui_file():
     window_file.mainloop()
     
     
-# def add_chat_display(msg, name):
-#     text_chat_tab.configure(state=tk.NORMAL)
-#     text_chat_tab.insert(tk.END, "\n")
-#     text_chat_tab.insert(tk.END, name + ": " + msg)
-#     text_chat_tab.configure(state="disabled")
-       
-#     if name == 'Me':
-#         text_chat_tab.tag_configure("green", foreground="green")
-#         text_chat_tab.insert(tk.END, "\n", "green")
-#     else:
-#         text_chat_tab.tag_configure("red", foreground="red")
-#         text_chat_tab.insert(tk.END, "\n", "red")
-
-# def send_message(event):
-#     try:
-#         msg = text_display.get()
-#         if msg and msg.strip() != "":
-#             text_display.delete(0, "end")
-#             text_chat_tab.tag_configure("red", foreground="red")
-#             send_data(chat_server_socket, CHAT_HEADER_SIZE, bytes(msg, "utf-8"))
-#             add_chat_display(msg, LOCAL_NAME)
-#     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
-#         print(e.strerror)
-
-
-# def receive_message():
-#     try:
-#         while True:
-#             msg = data_recive(chat_server_socket, CHAT_HEADER_SIZE, bytes())[0].decode("utf-8")
-#             text_chat_tab.tag_configure("green", foreground="green")
-#             add_chat_display(msg, REMOTE_NAME)
-#     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
-#         print(e.strerror)
-#     except ValueError:
-#         pass
-
-
 def remote_display_screen():
     global thread2, process1, process2, remote_server_socket 
     print("Send start message")
@@ -623,8 +620,7 @@ def remote_display_screen():
     print("Received client_resolution :", client_resolution)
     client_width, client_height = client_resolution.split(",")
 
-    display_width, display_height = computer_resolution(int(client_width), int(client_height), server_width,
-                                                                   server_height)
+    display_width, display_height = computer_resolution(int(client_width), int(client_height), server_width, server_height)
 
     if (client_width, client_height) != (display_width, display_height):
         resize_option = True
@@ -645,6 +641,148 @@ def remote_display_screen():
     screen_capture_process.start()
 
 
+def animate_text(label, text, delay, index=0):
+    label.config(text=text[:index])
+    index += 1
+    if index <= len(text):
+        label.after(delay, animate_text, label, text, delay, index)
+
+def on_enter(event):
+    sign_in_btn['background'] = '#1f8cff'
+    # connect_button['background'] = '#1f8cff'
+
+def on_leave(event):
+    sign_in_btn['background'] = '#28adff'
+    # connect_button['background'] = '#28adff'
+    
+
+def open_facebook():
+    webbrowser.open_new(r"https://www.facebook.com/multispanindia")
+    print('hello facebook')
+
+def open_instagram():
+    webbrowser.open_new(r"https://www.instagram.com/multispanindia")
+    print('hello instagram')
+    
+def open_tweeter():
+    webbrowser.open_new(r"https://twitter.com/multispanindia")
+    print('hello facebook')
+    
+def open_linkedin():
+    webbrowser.open_new(r"https://www.linkedin.com/company/multispancontrolinstruments")
+    print('hello linkedin')
+
+def display_text_file():
+    # Check if the file exists
+    if not exists('client_connection_log.txt'):
+        # Create the file if it doesn't exist
+        with open('client_connection_log.txt', 'w') as file:
+            pass
+
+    # Read the content of the file
+    with open('client_connection_log.txt', 'r') as file:
+        content = file.read()
+
+    # Clear previous content in the Text widget
+    file_text.delete('1.0', tk.END)
+
+    # Insert the file content into the Text widget
+    file_text.insert(tk.END, content)
+def apply_filter():
+    filter_text = search_entry.get().lower()
+
+    # Clear previous filter results
+    file_text.tag_remove('highlight', '1.0', tk.END)
+
+    # Apply the filter to file data
+    file_content = file_text.get('1.0', tk.END)
+    filtered_indices = [(m.start(), m.end()) for m in re.finditer(re.escape(filter_text), file_content, re.IGNORECASE)]
+    for start, end in filtered_indices:
+        file_text.tag_add('highlight', f'1.0+{start}c', f'1.0+{end}c')
+        
+
+def add_chat_display(msg, name,current_time):
+    formatted_message = f"{msg} \n {current_time}"
+    text_chat_tab.configure(state=tk.NORMAL,fg="white",padx=5,pady=10)
+    text_chat_tab.insert(tk.END, "\n")
+    text_chat_tab.insert(tk.END, name + ": " + formatted_message)
+    text_chat_tab.configure(state="disabled")
+
+def send_message():
+    try:
+        msg = input_text_widget.get()
+        print('send_message', msg)
+
+        if msg and msg.strip() != "":
+            input_text_widget.delete(0, "end")
+            send_data(chat_server_socket, CHAT_HEADER_SIZE, bytes(msg, "utf-8"))
+
+            current_time = datetime.now().strftime("%H:%M:%S")
+            add_chat_display(msg, LOCAL_NAME, current_time)
+
+            # Save the message to the chat log file
+            save_chat_message(msg, LOCAL_NAME + ":", current_time)
+
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
+        print(e.strerror)
+
+
+def receive_message():
+    try:
+        while True:
+            msg = data_recive(chat_server_socket, CHAT_HEADER_SIZE, bytes())[0].decode("utf-8")
+
+            current_time = datetime.now().strftime("%H:%M:%S")
+            add_chat_display(msg, REMOTE_NAME, current_time)
+
+            # Save the message to the chat log file
+            save_chat_message(msg, REMOTE_NAME + ":", current_time)
+
+            if not is_chat_window_open():
+                messagebox.showinfo("New Message", "You have a new message!")
+
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
+        print(e.strerror)
+    except ValueError:
+        pass
+
+def is_chat_window_open():
+    return chat_frame.winfo_exists() and chat_frame.winfo_viewable()
+
+# Function to save chat message in the database
+def save_chat_message(sender, message,timestamp):
+    conn = sqlite3.connect('chat_database.db')
+    cursor = conn.cursor()
+    
+    # Create the table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            sender TEXT ,
+            message TEXT  
+        )
+    ''')
+    
+    # Get the current timestamp
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Insert the chat message with the timestamp into the table
+    cursor.execute('INSERT INTO chat_messages (timestamp,sender, message) VALUES (?, ?, ?)', (timestamp,sender,message))
+    
+    conn.commit()
+    conn.close()
+
+# # File to save the chat messages
+# chat_log_file = "chat_log.txt"
+
+# def save_to_chat_log(msg,sender_name):
+#     current_time = datetime.now().strftime("%H:%M:%S")
+#     formatted_message = f"[{current_time}] {sender_name} {msg}"
+#     with open(chat_log_file, "a") as file:
+#         file.write(formatted_message + "\n")
+        
+     
 if __name__ == "__main__":
     
     freeze_support()
@@ -671,7 +809,6 @@ if __name__ == "__main__":
     button_code = {Button.left: (1, 4), Button.right: (2, 5), Button.middle: (3, 6)}
 
     root = tk.Tk()
-    # root.geometry('1900x1050')
     root.title("Remote Access Desktop Application")
     # root.iconphoto(True,tk.PhotoImage(file='assets/images/img/m_logo'))
     root.iconbitmap("m_logo.ico")
@@ -685,16 +822,15 @@ if __name__ == "__main__":
     frame2 = tk.Frame(root)
     frame3 = tk.Frame(root)
     frame4 = tk.Frame(root)
-    frame5 = tk.Frame(root)
 
 
-    for frame in (frame1, frame2, frame3,frame4, frame5):
+    for frame in (frame1, frame2, frame3,frame4):
         frame.grid(row=0,column=0,sticky='nsew')
         
     #==================Frame 1 code=======================
     # Set the background image
-    # img = tk.PhotoImage(file='assets/images/images/leone-venter-VieM9BdZKFo-unsplash.png')
-    img = Image.open('assets/images/images/leone-venter-VieM9BdZKFo-unsplash.png')
+    img = Image.open('assets/leone-venter-VieM9BdZKFo-unsplash.png')
+    #
     resized_image = img.resize((1920, 1020), Image.LANCZOS)
 
     # Convert the resized image to PhotoImage
@@ -702,37 +838,61 @@ if __name__ == "__main__":
     label = tk.Label(frame1, image=new_image, background='#f2f2f2')
     label.place(x=0, y=0, relwidth=1, relheight=1)
 
-    logo_image = tk.PhotoImage(file='assets/images/img/multispan-logo.png')
+    # logo_image = tk.PhotoImage(file='assets/images/img/multispan-logo.png')\
+    logo_image = tk.PhotoImage(file='assets/img/multispan-logo.png')
+        
     logo_label = tk.Label(frame1, image=logo_image, bg='#f2f2f2')
-    logo_label.place(x=60, y=50)
+    logo_label.place(x=60, y=40)
+    # logo_label.pack(expand=True)
 
 
     # left side 
-    # Heading
-    heading1_label = tk.Label(frame1, text='Provide help', font=('Rubik', 23, 'bold'), fg='black', bg='#f2f2f2')
-    heading1_label.place(x=200,y=350)
+    # Create a card frame
+    card_frame0 = tk.Frame(frame1, bg='#f2f2f2', padx=20, pady=20)
+    card_frame0.place(x=223, y=320)
 
-    heading2_label = tk.Label(frame1, text='Remotely access and control.', font=('Rubik', 18, 'bold'), fg='black', bg='#f2f2f2')
-    heading2_label.place(x=200,y=405)
+    heading1_label = tk.Label(card_frame0, text='Provide help', font=('Rubik', 23, 'bold'), fg='black', bg='#f2f2f2', padx=25)
+    heading1_label.pack(anchor='w')
 
-    paragraph_label = tk.Label(frame1, text='''
+    # separator = ttk.Separator(card_frame0, orient='horizontal', style='info.Horizontal.TSeparator')
+    # separator.pack(fill='x', pady=5,padx=20)
+
+    heading2_label = tk.Label(card_frame0, text='Remotely access and control.', font=('Rubik', 18, 'bold'), fg='black', bg='#f2f2f2', justify='left')
+    heading2_label.pack()
+
+    text_to_animate_1 = heading1_label.cget('text')
+    text_to_animate_2 = heading2_label.cget('text')
+    animation_delay = 100  # milliseconds
+
+    # animate_text(heading1_label, text_to_animate_1, animation_delay)
+    animate_text(heading2_label, text_to_animate_2, animation_delay)
+
+
+    paragraph_label = tk.Label(card_frame0, text='''
     Sign in to TeamViewer Remote to view, control and
     access any device.
     ''', font=('Rubik', 13), fg='gray', bg='#f2f2f2', justify='left',padx=0,pady=0)
     paragraph_label.pack(anchor='w')
-    paragraph_label.place(x=200,y=435)
+    # paragraph_label.place(x=2,y=100)
 
-    sign_in_btn = tk.Button(frame1,text='SIGN IN',width=13,height=2,bg='#28adff',fg='white', font=('Rubik', 12, 'bold'))
+    sign_in_btn = tk.Button(card_frame0,text='SIGN IN',width=13,height=2,bg='#28adff',fg='white', font=('Rubik', 12, 'bold'))
     sign_in_btn.pack()
-    sign_in_btn.place(x=200,y=520)
+    # sign_in_btn.place(x=25,y=150)
+    
 
-    dont_have_account_text =  tk.Label(frame1, text="Don't have an account? ", font=('Rubik', 11), fg='gray', bg='#f2f2f2')
-    dont_have_account_text.pack()
-    dont_have_account_text.place(x=200,y=580)
+    style = ttk.Style()
+    style.configure('Custom.TButton', background='#28adff', foreground='white', font=('Rubik', 12, 'bold'))
 
-    dont_have_account_text1 =  tk.Label(frame1, text="Create one here.", font=('Rubik', 11), fg='#28adff', bg='#f2f2f2')
+    sign_in_btn.bind("<Enter>", on_enter)
+    sign_in_btn.bind("<Leave>", on_leave)
+
+    dont_have_account_text =  tk.Label(card_frame0, text="Don't have an account? ", font=('Rubik', 11), fg='gray', bg='#f2f2f2',padx=25)
+    dont_have_account_text.pack(anchor='w')
+    # dont_have_account_text.place(x=200,y=580)
+
+    dont_have_account_text1 =  tk.Label(card_frame0, text="Create one here.", font=('Rubik', 11), fg='#28adff', bg='#f2f2f2')
     dont_have_account_text1.pack()
-    dont_have_account_text1.place(x=357,y=580)
+    dont_have_account_text1.place(x=180,y=210)
 
 
     # right side
@@ -754,53 +914,77 @@ if __name__ == "__main__":
     ''', font=('Rubik', 10), fg='gray', bg='#f8f9f9', justify='left')
     paragraph1.pack(anchor='w')
 
-    # Create the input frame
+    # # Create the input frame
     input_frame = tk.Frame(card_frame, padx=10, pady=10, bg='#f8f9f9')
     input_frame.pack()
 
-    # Create the password label and entry
-    IP_label = tk.Label(input_frame, text="IP:", font=('Rubik', 12), bg='#f8f9f9')
+    # Create the IP label and entry
+    IP_label = tk.Label(input_frame, text="USERNAME     : ",  font=('Rubik', 11, 'bold'), bg='#f8f9f9')
     IP_label.grid(row=0, column=0, sticky=tk.W)
 
-    name_entry = tk.Entry(input_frame, font=('Rubik', 12))
-    name_entry.grid(row=0, column=1, padx=10, pady=5)
+    name_entry = ttk.Entry(input_frame, font=('Rubik', 12), style='info.TEntry', width=20, foreground='gray')
+    name_entry.grid(row=0, column=1, ipadx=20, ipady=5, pady=5)
 
     # Create the password label and entry
-    password_label = tk.Label(input_frame, text="Password:", font=('Rubik', 12), bg='#f8f9f9')
+    password_label = tk.Label(input_frame, text="ENTRY CODE : ", font=('Rubik', 11, 'bold'), bg='#f8f9f9')
     password_label.grid(row=1, column=0, sticky=tk.W)
 
-    password_entry = tk.Entry(input_frame, font=('Rubik', 12), show="*")
-    password_entry.grid(row=1, column=1, padx=10, pady=5)
+    password_entry = ttk.Entry(input_frame, font=('Rubik', 12), show="*", style='info.TEntry', width=20, foreground='gray')
+    password_entry.grid(row=1, column=1, ipadx=20, ipady=5, pady=5)
 
-    connect_button = tk.Button(input_frame, text="Connect", font=('Rubik', 10),bg='#28adff',fg='white')
-    connect_button.grid(row=2, column=1, padx=5,sticky=tk.N)
-    connect_button.configure(width=22,height=1)
+    connect_button = tk.Button(input_frame, text="Connect", font=('Rubik', 12,'bold'), bg='#28adff', fg='white')
+    connect_button.grid(row=2, column=1, padx=5, sticky=tk.N, pady=5)
+    connect_button.configure(width=22, height=1)
     connect_button.config(command=login_to_connect)
+
+    separator1 = ttk.Separator(frame1, orient='horizontal', style='info.Horizontal.TSeparator')
+    separator1.pack(fill='x', pady=5,padx=20)
     
-    # disconnect_button = tk.Button(input_frame, text="Disconnect", font=('Rubik', 10),bg='#28adff',fg='white',command=lambda: disconnect("button"))
-    # disconnect_button.grid(row=2, column=1, padx=5, sticky=tk.N)
-    # disconnect_button.configure(width=22,height=1,state=tk.DISABLED)
-
-
+    social = tk.Frame(frame1)
+    social.pack()
+    
+    #https://www.facebook.com/multispanindia
+    facebook = tk.PhotoImage(file='assets/facebook.png')  
+    fb_btn = tk.Button(social,image=facebook,relief=tk.FLAT,command=open_facebook)
+    fb_btn.pack(side='left',padx=15)
+    
+    #https://www.instagram.com/multispanindia/
+    instagram = tk.PhotoImage(file='assets/img/camera.png')   
+    insta_btn = tk.Button(social,image=instagram,relief=tk.FLAT,command=open_instagram)
+    insta_btn.pack(side='left',padx=15)
+    
+    #https://twitter.com/multispanindia
+    tweeter = tk.PhotoImage(file='assets/img/twitter-logo.png')   
+    tweet_btn = tk.Button(social,image=tweeter,relief=tk.FLAT,command=open_tweeter)
+    tweet_btn.pack(side='left',padx=15)
+    
+    #https://www.linkedin.com/company/multispancontrolinstruments
+    linkedin = tk.PhotoImage(file='assets/linkedin.png')   
+    link_btn = tk.Button(social,image=linkedin,relief=tk.FLAT,command=open_linkedin)
+    link_btn.pack(side='left',padx=15)
+    
+    paragraph2 = tk.Label(frame1, text='Copyright © 2023 Multispan India. All rights reserved', font=('Rubik', 10), fg='gray', bg='#f2f2f2')
+    paragraph2.pack(anchor=tk.CENTER)
+    
+    separator2 = ttk.Separator(frame1, orient='horizontal', style='info.Horizontal.TSeparator')
+    separator2.pack(fill='x', pady=5,padx=20)
+        
     #==================Frame 2 code====================
-    bg_img = tk.PhotoImage(file='assets/images/img/shubham-dhage-0aQ1lxP0wTs-unsplash.png')
+    bg_img = tk.PhotoImage(file='assets/georgie-cobbs-bKjHgo_Lbpo-unsplash (1).png')
     background = tk.Label(frame2, image=bg_img)
     background.place(x=0, y=0, relwidth=1, relheight=1)
 
     # Create the header frame
-    header_frame = tk.Frame(frame2, bg="#2E2E2E")
+    header_frame = tk.Frame(frame2, bg="#8A8A8A")
     header_frame.place(x=0, y=0, width=800)
     header_frame.pack(fill="x")
 
-    logo = tk.PhotoImage(file='assets/images/img/logo2.png')
-    logo_img = tk.Label(header_frame, image=logo, bg="#2E2E2E")
+    logo = tk.PhotoImage(file='assets/img/logo2.png')
+    logo_img = tk.Label(header_frame, image=logo, bg="#8A8A8A")
     logo_img.pack(side="left", padx=10)
 
-    # heder_text = Label(header_frame, text='Multispan', font=('Ubuntu Medium', 15, 'bold'), bg='#2E2E2E', fg='white')
-    # heder_text.pack(side="left", padx=5)
-
     # Create a container frame for search elements
-    search_container = tk.Frame(header_frame, bg="#2E2E2E")
+    search_container = tk.Frame(header_frame, bg="#8A8A8A")
     search_container.pack(padx=10, pady=10)
 
     # Create the search bar
@@ -808,66 +992,66 @@ if __name__ == "__main__":
     search_bar.pack(side="left")
 
     # Create the search icon
-    search_img = tk.PhotoImage(file='assets/images/img/icons8-search-48.png')
-    search_icon = tk.Label(search_container, image=search_img, font=("Rubik", 14), bg="#2E2E2E")
+    search_img = tk.PhotoImage(file='assets/magnifying-glass.png')
+    search_icon = tk.Label(search_container, image=search_img, font=("Rubik", 14), bg="#8A8A8A")
     search_icon.pack(side="left", padx=5)
 
-    user = tk.PhotoImage(file='assets/images/img/icons8-user-64.png')
-    user_profile = tk.Label(search_container, image=user, bg="#2E2E2E")
+    user = tk.PhotoImage(file='assets/user.png')
+    user_profile = tk.Label(search_container, image=user, bg="#8A8A8A")
     user_profile.pack()
 
     # Create the sidebar frame
-    sidebar_frame = tk.Frame(frame2, bg="#8A8A8A", width=200)
+    sidebar_frame = tk.Frame(frame2, bg="white", width=200)
     sidebar_frame.pack(fill="y", side="left")
 
     # Create the sidebar content
-    home_img = tk.PhotoImage(file='assets/images/img/icons8-home-50.png')
-    home_icon = tk.Label(sidebar_frame, image=home_img, font=("Rubik", 16), bg="#8A8A8A")
+    home_img = tk.PhotoImage(file='assets/img/icons8-home-50.png')
+    home_icon = tk.Button(sidebar_frame, image=home_img, font=("Rubik", 16), bg="white",fg='white',relief='flat', borderwidth=0,)
     home_icon.pack(padx=10, pady=10)
 
-    file_img = tk.PhotoImage(file='assets/images/img/icons8-downlod-64.png')
-    file_icon = tk.Label(sidebar_frame, image=file_img, font=("Rubik", 16), bg="#8A8A8A")
+    file_img = tk.PhotoImage(file='assets/img/icons8-downlod-64.png')
+    file_icon = tk.Button(sidebar_frame, image=file_img, font=("Rubik", 16), bg="white",fg='white',relief='flat', borderwidth=0)
     file_icon.pack(padx=10, pady=10)
+    
+    dashboard = tk.PhotoImage(file='assets/dashboard.png')
+    dashboard_icon = tk.Button(sidebar_frame, image=dashboard, font=("Rubik", 16), bg="white",fg='white',relief='flat', borderwidth=0,command=lambda:show_frame(frame4))
+    dashboard_icon.pack(padx=10, pady=10)
 
-    logout = tk.Button(sidebar_frame,text="Logout", font=("Rubik", 10), bg="#8A8A8A",fg='black')
+    logout = tk.Button(sidebar_frame,text="Logout", font=("Rubik", 10), bg="white",fg='black',relief='flat')
     logout.config(command=lambda:show_frame(frame1))
     logout.pack()
 
-    back_btn = tk.Button(sidebar_frame,text="Back", font=("Rubik", 10), bg="#8A8A8A",fg='black')
-    back_btn.config(command=lambda:show_frame(frame1))
-    back_btn.pack()
-
     # Create the content frame
-    content_frame = tk.Frame(frame2, bg="black",width=600)
+    content_frame = tk.Frame(frame2, bg="white",width=600)
     content_frame.pack(expand=True)
     # content_frame.place(x=600, y=300)
 
     # Create the grid frames
-    grid_frame = tk.Frame(content_frame, bg="black", padx=10, pady=10)
+    grid_frame = tk.Frame(content_frame, bg="white", padx=10, pady=10)
     grid_frame.pack(side="left")
 
-    grid_frame1 = tk.Frame(content_frame,bg='black', padx=0, pady=10)
+    grid_frame1 = tk.Frame(content_frame,bg='#8A8A8A', padx=0, pady=10)
     grid_frame1.pack(side="left")
 
-    label = tk.Label(grid_frame1, text='Remote Actions', font=('Rubik', 14, 'bold'), bg='black',fg='white')
+    label = tk.Label(grid_frame1, text='Remote Actions', font=('Rubik', 14, 'bold'), bg='#8A8A8A',fg='white')
     label.grid(row=0, column=0, columnspan=2, pady=10)
 
     # Create the card labels
-    card1 = tk.Button(grid_frame1,bg='black',fg='white', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
+    card1 = tk.Button(grid_frame1,bg='#8A8A8A',fg='black', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
     card1.config(compound=tk.TOP, bd=0, command=remote_display)
-    card2 = tk.Button(grid_frame1,bg='black',fg='white', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
+    card2 = tk.Button(grid_frame1,bg='#8A8A8A',fg='black', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
     card2.config(compound=tk.TOP, bd=0,command=remote_display_screen)
-    card3 = tk.Button(grid_frame1,bg='black',fg='white', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
+    card3 = tk.Button(grid_frame1,bg='#8A8A8A',fg='black', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
     # card3.config(command=lambda:show_frame(frame5))
     card3.config(command=ui_file)
-    card4 = tk.Button(grid_frame1,bg='black',fg='white', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
+    card4 = tk.Button(grid_frame1,bg='#8A8A8A',fg='black', width=54, height=54,relief='flat', borderwidth=0, activebackground='#171717')
     card4.config(command=lambda:show_frame(frame3))
 
     # Load the icon images
-    icon1 = tk.PhotoImage(file="assets/images/img/icons8-remote-desktop-48.png")
-    icon2 = tk.PhotoImage(file="assets/images/img/icons8-screen-share-64.png")
-    icon3 = tk.PhotoImage(file="assets/images/img/icons8-downloads-folder-94.png")
-    icon4 = tk.PhotoImage(file="assets/images/img/icons8-chat-94.png")
+    icon1 = tk.PhotoImage(file="assets/img/icons8-remote-desktop-48.png")
+    icon2 = tk.PhotoImage(file="assets/img/icons8-screen-share-64.png")
+    icon3 = tk.PhotoImage(file="assets/img/icons8-downloads-folder-94.png")
+    icon4 = tk.PhotoImage(file="assets/img/icons8-chat-94.png")
 
     # Set the icons for each card
     card1.config(image=icon1)
@@ -877,20 +1061,20 @@ if __name__ == "__main__":
 
     # Add text labels below the icons
 
-    text1 = tk.Label(grid_frame1, text="Remote Access", font=('Rubik', 12, 'bold'), bg='black',fg='white')
+    text1 = tk.Label(grid_frame1, text="Remote Access", font=('Rubik', 12, 'bold'), bg='#8A8A8A',fg='white')
     sub_text1 = tk.Label(grid_frame1, text="""Set up for Remote
-    desktop control""", font=('Rubik', 10),bg='black',fg='#8A8A8A', pady=1,justify= tk.LEFT)
+    desktop control""", font=('Rubik', 10),bg='#8A8A8A',fg='#DCDEE6', pady=1,justify= tk.LEFT)
 
-    text2 = tk.Label(grid_frame1, text="Screen Share", font=('Rubik', 12, 'bold'),bg='black',fg='white')
+    text2 = tk.Label(grid_frame1, text="Screen Share", font=('Rubik', 12, 'bold'),bg='#8A8A8A',fg='white')
     sub_text2 = tk.Label(grid_frame1, text="""Start with sharing
-    your screen""", font=('Rubik', 10),bg='black',fg='#8A8A8A', pady=1,justify= tk.LEFT)
+    your screen""", font=('Rubik', 10),bg='#8A8A8A',fg='#DCDEE6', pady=1,justify= tk.LEFT)
 
-    text3 = tk.Label(grid_frame1, text="File Transfer", font=('Rubik', 12, 'bold'),bg='black',fg='white')
-    sub_text3 = tk.Label(grid_frame1, text="""Transfer files""", font=('Rubik', 10),bg='black',fg='#8A8A8A', pady=1,justify= tk.LEFT)
+    text3 = tk.Label(grid_frame1, text="File Transfer", font=('Rubik', 12, 'bold'),bg='#8A8A8A',fg='white')
+    sub_text3 = tk.Label(grid_frame1, text="""Transfer files""", font=('Rubik', 10),bg='#8A8A8A',fg='#DCDEE6', pady=1,justify= tk.LEFT)
 
-    text4 = tk.Label(grid_frame1, text="Chat", font=('Rubik', 12, 'bold'),bg='black',fg='white')
+    text4 = tk.Label(grid_frame1, text="Chat", font=('Rubik', 12, 'bold'),bg='#8A8A8A',fg='white')
     sub_text4 = tk.Label(grid_frame1, text="""Start chat with your
-    loved ones""", font=('Rubik', 10),bg='black',fg='#8A8A8A', pady=1,justify= tk.LEFT)
+    loved ones""", font=('Rubik', 10),bg='#8A8A8A',fg='#DCDEE6', pady=1,justify= tk.LEFT)
 
 
     # Grid layout for cards and text labels
@@ -910,7 +1094,7 @@ if __name__ == "__main__":
     text4.grid(row=5, column=1, padx=30)
     sub_text4.grid(row=6, column=1, padx=30)
 
-    heading_text = tk.Label(grid_frame, text='Start Your Journey With Us', font=('Rubik', 25,'bold'),bg='black',fg='white')
+    heading_text = tk.Label(grid_frame, text='Start Your Journey With Us', font=('Rubik', 25,'bold'),bg='white',fg='black')
     heading_text.pack()
 
     pera = tk.Label(grid_frame,text="""
@@ -922,8 +1106,116 @@ if __name__ == "__main__":
     ensuring a higher level of security.\n
     TeamViewer is now easier to use and more accessible. 
     Easier to navigate, faster to train on, more intuitive to use             
-    """, font=('Rubik', 11),bg='black',fg='#8A8A8A',justify= tk.LEFT).pack()
+    """, font=('Rubik', 11),bg='white',fg='#8A8A8A',justify= tk.LEFT).pack()
     
+    paragraph3 = tk.Label(frame2, text='Copyright © 2023 Multispan India. All rights reserved', font=('Rubik', 10), fg='black', bg='#DDCEB5')
+    paragraph3.pack(anchor=tk.CENTER)
+    
+    
+    #==================Frame 3 code====================
+    chat_bg = tk.PhotoImage(file='assets/chatframebg1.png')
+    background = tk.Label(frame3, image=chat_bg)
+    background.place(x=0, y=0, relwidth=1, relheight=1)
+    
+     # Heading with icon
+    heading_frame = tk.Frame(frame3,bg="black")
+    heading_frame.pack(fill="x", padx=450, pady=20)
+    # Text
+    heading_label = tk.Label(heading_frame, text="Chat Room", font=("Rubik", 14,"bold"),  bg="black", fg="white",anchor="center")
+    heading_label.pack(side="left", padx=5,pady=5)
+    
+    chat_frame = tk.LabelFrame(frame3, padx=20, pady=20, bd=0 , width=50,height=5,background="black" ,fg='white')
+    chat_frame.pack()
+
+
+    text_chat_tab = scrolledtext.ScrolledText(chat_frame,bd=0, width=40, height=20,font=("Arial", 12),background="black",fg='white')
+    # text_chat_tab.vbar.config(troughcolor = 'red', bg = 'blue')
+    text_chat_tab.pack(padx=10,pady=10)
+    text_chat_tab.configure(state="disabled")
+    
+
+    input_text_frame = tk.LabelFrame(chat_frame, pady=5, bd=0,background="black",fg='white')
+    input_text_frame.pack()
+
+    input_text_widget = tk.Entry(input_text_frame, width=40,background="black" , highlightcolor="blue",fg='white')
+    input_text_widget.configure(font=("arial", 14))
+    input_text_widget.bind("<Return>", send_message)
+    # input_text_widget.bind("<Enter>",send_message)
+    input_text_widget.pack(side="left", padx=5,pady=5)
+
+    send_icon = tk.PhotoImage(file="assets/img/send.png")
+    send_button = tk.Button(input_text_frame, image=send_icon, command=send_message,background="black",bd=0)
+    send_button.pack(side="left", padx=10,pady=10)
+
+    back_icon = tk.PhotoImage(file="assets/img/back.png")
+    back_button = tk.Button(frame3,image=back_icon,command=lambda:show_frame(frame2),bd=0,background="black")
+    back_button.place(x=390,y=20)
+    #==================Frame 4 code====================
+   
+    # Create a header frame
+    header_frame2 = tk.Frame(frame4, bg="#8A8A8A")
+    header_frame2.place(x=0, y=0, width=800,height=20)
+    header_frame2.pack(fill="x")
+    
+    logo2 = tk.PhotoImage(file='assets/img/logo2.png')
+    logo_img2 = tk.Label(header_frame2, image=logo, bg="#8A8A8A")
+    logo_img2.pack(side="left", padx=10)
+
+    search_container2 = tk.Frame(header_frame2, bg="#8A8A8A")
+    search_container2.pack(padx=10, pady=5)
+
+    # Create a filter input Entry widget
+    search_entry = tk.Entry(search_container2,font=("Rubik", 14), width=50)
+    search_entry.pack(padx=10, pady=5,side="left")
+
+    # Create the search icon
+    search_icon = tk.Button(search_container2, image=search_img, bg="#8A8A8A", activebackground='#8A8A8A',relief='flat', borderwidth=0, command=apply_filter)
+    search_icon.pack(side="left", padx=5)
+
+    # Create a load button
+    load_img = tk.PhotoImage(file='assets/refresh-buttons.png')
+    load_button = tk.Button(search_container2,image=load_img, bg="#8A8A8A", activebackground='#8A8A8A',relief='flat', borderwidth=0, command=display_text_file)
+    load_button.pack(padx=10,pady=5)
+    
+    
+    # Create the sidebar frame
+    sidebar_frame2 = tk.Frame(frame4, bg="white", width=200)
+    sidebar_frame2.pack(fill="y", side="left")
+
+    # Create the sidebar content
+    home_icon2 = tk.Button(sidebar_frame2, image=home_img, font=("Rubik", 16), bg="white",fg='white',relief='flat', borderwidth=0,command=lambda:show_frame(frame2))
+    home_icon2.pack(padx=10, pady=10)
+
+    file_icon2 = tk.Button(sidebar_frame2, image=file_img, font=("Rubik", 16), bg="white",fg='white',relief='flat', borderwidth=0)
+    file_icon2.pack(padx=10, pady=10)
+
+    dashboard_icon2 = tk.Button(sidebar_frame2, image=dashboard, font=("Rubik", 16), bg="white",fg='white',relief='flat', borderwidth=0,command=lambda:show_frame(frame4))
+    dashboard_icon2.pack(padx=10, pady=10)
+
+    logout2 = tk.Button(sidebar_frame2,text="Logout", font=("Rubik", 10), bg="white",fg='black',relief='flat')
+    logout2.config(command=lambda:show_frame(frame1))
+    logout2.pack()
+
+    # Create a frame for the text
+    text_frame = tk.Frame(frame4)
+    text_frame.pack(fill=tk.BOTH, expand=True)
+
+    # Create a Text widget for file data
+    file_text = tk.Text(text_frame, font=('arial',12), wrap=tk.WORD)
+    file_text.pack(fill=tk.BOTH,expand=True)
+    
+    # Center the text in the frame
+    file_text.tag_configure('center', justify='center')
+    file_text.insert(tk.END, "Text to be displayed in the center of the frame", 'center')
+
+    # Add a tag for highlighting filtered text
+    file_text.tag_configure('highlight', background='yellow')
+    
+    paragraph3 = tk.Label(frame4, text='Copyright © 2023 Multispan India. All rights reserved', font=('Rubik', 10), fg='gray', bg='#f2f2f2')
+    paragraph3.pack(anchor=tk.CENTER)
+
+    display_text_file() # Display connection log in screen
+        
     show_frame(frame1)
 
     root.mainloop()

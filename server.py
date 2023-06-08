@@ -1,4 +1,5 @@
 import socket
+import sqlite3
 import mss
 import ctypes 
 import string
@@ -19,10 +20,10 @@ import mss
 import mss.tools
 import os
 import time
-import datetime
+from datetime import datetime 
 import shutil
 from tkinterdnd2 import TkinterDnD, DND_FILES
-from tkinter import filedialog
+from tkinter import filedialog , scrolledtext
 import tkinter.dnd as dnd
 
 
@@ -199,8 +200,6 @@ def socket_listener_create(server_ip, port):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind((server_ip, 1234))
     sock.listen(1)
-   
-    
     return sock
 
     
@@ -282,9 +281,10 @@ def is_password_expired():
     if password_entered_time is not None:
         elapsed_time = time.time() - password_entered_time
         if elapsed_time >= 30 * 60:  # 30 minutes - if elapsed_time >= 30 * 60:  # 30 minutes
-            
+            print("Password Expired")
             messagebox.showinfo("Password Expired", "Your password has expired. Please login again.")
-            reset_ui()
+            close_socket()
+            stop_listining()
             # Reset the global variables
             client_socket_remote = None
             server_socket = None
@@ -359,7 +359,7 @@ def login_to_connect(sock):
                 print(f'received_password : {received_password}')
                 if received_password == PASSWORD:
                     send_data(command_client_socket, 2, bytes("1", "utf-8"))
-                    connection_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    connection_time =datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     log_message = f"Connection from {address[0]} established at {connection_time}\n"
 
                     # Write the log message to a file
@@ -385,8 +385,10 @@ def login_to_connect(sock):
                     
                     IS_CLIENT_CONNECTED = True
                     # thread for chat
-                    # recv_chat_msg_thread = Thread(target=receive_message, name="recv_chat_msg_thread", daemon=True)
-                    # recv_chat_msg_thread.start()
+                    recv_chat_msg_thread = Thread(target=receive_message, name="recv_chat_msg_thread", daemon=True)
+                    recv_chat_msg_thread.start()
+                    
+                    my_screen.add(chat_frame, text=" Chat ")
                     
                     accept = False
 
@@ -418,7 +420,7 @@ def listinging_commands():
             elif msg == 'screen_sharing' or msg == '        screen':
                 screen_sending_client() 
                 print("start screen shareing sending msg recive")   
-            elif msg == '        start_file_':
+            elif msg == '        start_file_' or msg == 'start_file_explorer':
                 receive_files()    
             elif msg == "disconnect":
                 listen = False
@@ -453,6 +455,9 @@ def screen_sending_client():
 
     process2 = Process(target=take_from_list_and_send, args=(screenshot_sync_queue, client_socket_remote), daemon=True)
     process2.start()
+    
+    
+
  
 forbidden_extensions = [".exe", ".dll"]
 def receive_files():
@@ -463,11 +468,6 @@ def receive_files():
     print('filename---',filename)
     destination = os.path.join(directory, filename)
    
-    with open(destination, 'wb') as file:
-        data = file_client_socket.recv(1024)
-        file.write(data)
-    print('File successfully received:', filename)
-    
     extension = os.path.splitext(filename)[1].lower()
     if extension in forbidden_extensions:
         # Ask for confirmation to download forbidden file types
@@ -476,13 +476,59 @@ def receive_files():
             print(f"Skipping file: {filename}")
             return
     
-    connection_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(destination, 'wb') as file:
+        data = file_client_socket.recv(1024)
+        file.write(data)
+    print('File successfully received:', filename)
+    connection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     log_message = f"{filename} File successfully received from {socket.gethostbyname(socket.gethostname())} at {connection_time}\n"
 
     # Write the log message to a file
     with open("connection_log.txt", "a") as file:
         file.write(log_message)   
-   
+    messagebox.showinfo("File Received", f"File '{filename}' received successfully!")
+
+def add_chat_display(msg,name):
+    current_time = datetime.now().strftime("%H:%M")
+    formatted_message = f"{msg} \n {current_time}"
+    text_chat_tab.configure(state=tk.NORMAL)
+    text_chat_tab.insert(tk.END, "\n")
+    text_chat_tab.insert(tk.END, name + ": " + formatted_message)
+    text_chat_tab.configure(state="disabled")
+    
+
+def send_message():
+    try:
+        msg = input_text_widget.get()
+        print("send_message",msg)
+        if msg and msg.strip() != "":
+            input_text_widget.delete(0, "end")
+            
+            send_data(chat_client_socket, CHAT_HEADER_SIZE, bytes(msg, "utf-8"))
+            add_chat_display(msg, LOCAL_NAME)
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
+        print(e.strerror)
+
+
+def receive_message():
+    try:
+        while True:
+            msg = data_recive(chat_client_socket, CHAT_HEADER_SIZE, bytes())[0].decode("utf-8")
+            print("receive_message",msg)
+
+            add_chat_display(msg, REMOTE_NAME)
+            if not is_chat_window_open():
+                messagebox.showinfo("New Message", "You have a new message!")
+            # text_chat_tab.tag_configure("green", foreground="green")
+    except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
+        print(e.strerror)
+    except ValueError:
+        pass
+
+def is_chat_window_open():
+    return chat_frame.winfo_exists() and chat_frame.winfo_viewable()
+
+
         
 if __name__ == "__main__":
     
@@ -551,9 +597,9 @@ if __name__ == "__main__":
     connection_frame.grid(row=1, column=0, padx=120, pady=80, sticky=tk.W)
     send_window = tk.LabelFrame(my_screen,padx=100, pady=5, bd=0)
     send_window.configure(bg='#f4fdfe')
-    icon = tk.PhotoImage(file='assets/send.png')
+    # icon = tk.PhotoImage(file='assets/send.png')
     
-    # btn = tk.Button(send_window,text='Receive',command=Ui_file).pack()
+    # btn = tk.Button(send_window,text='Receive',command=Ui_file).grid()
 
     radio_var = tk.IntVar()
     radio_var.set(1)
@@ -589,12 +635,35 @@ if __name__ == "__main__":
     label_status = tk.Label(root, text="Not Connected", image=red, compound=tk.LEFT, relief=tk.SUNKEN, anchor=tk.E, padx=10)
     label_status.configure(font=normal_font,background='whitesmoke',fg='brown')
     label_status.grid(row=3, column=0, columnspan=2, sticky=tk.W + tk.E)
+    
+    #chat UI==========================================
+    chat_frame = tk.LabelFrame(my_screen, padx=20, pady=20, bd=0 , width=50,height=5,background="aliceblue")
+    chat_frame.grid(row=1, column=0, sticky=tk.N)
+    
+    text_chat_tab = scrolledtext.ScrolledText(chat_frame, width=40, height=20,font=("Arial", 12),background="aliceblue")
+    text_chat_tab.grid(row=0, column=0, sticky=tk.N)
+    text_chat_tab.configure(state="disabled")
+
+    input_text_frame = tk.LabelFrame(chat_frame, pady=5, bd=0,background="aliceblue")
+    input_text_frame.grid(row=1, column=0, sticky=tk.W)
+
+    input_text_widget = tk.Entry(input_text_frame, width=40,background="mintcream" , highlightcolor="blue")
+    input_text_widget.configure(font=("arial", 14))
+    input_text_widget.bind("<Return>", send_message)
+    input_text_widget.bind("<Enter>",send_message)
+    input_text_widget.grid(row=0, column=0, pady=10, sticky=tk.W)
+
+    send_icon = tk.PhotoImage(file="assets/img/send.png")
+    send_button = tk.Button(input_text_frame, image=send_icon, command=send_message,background="aliceblue",bd=0)
+    send_button.grid(row=0, column=1, pady=10,padx=10 , sticky=tk.W)
+    
     # Create Tab 
     tab_style = ttk.Style()
     tab_style.configure('TNotebook.Tab', font=title_font_normal)
     
     my_screen.add(listener_frame, text=" Remote Access Connection")
-    my_screen.add(send_window,text=" File ")
+    my_screen.add(chat_frame, text=" Chat ")
+    # my_screen.add(send_window,text=" File ")
     
-    # my_screen.hide(1)
+    my_screen.hide(1)
     root.mainloop()
