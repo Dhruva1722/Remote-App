@@ -341,7 +341,7 @@ def stop_listining():
 
 
 def login_to_connect(sock):
-    global command_client_socket, client_socket_remote, thread1, file_client_socket, IS_CLIENT_CONNECTED, f_thread, chat_client_socket
+    global command_client_socket, client_socket_remote, thread1, file_client_socket, IS_CLIENT_CONNECTED, f_thread, chat_client_socket,client_address
     
     accept = True
     try:
@@ -349,9 +349,12 @@ def login_to_connect(sock):
             print("\n")
             print("Start listening for incoming connection")
             
+            
             label_status.configure(font=normal_font, text="Start listening", image=yellow)
             command_client_socket, address = sock.accept()
-
+            #save address in file_log databse 
+            client_address = address[0]
+            
             print(f"Received login request from {address[0]}...")
             if messagebox.askquestion("Login Request", f"Received login request from {address[0]}... Do you want to connect?") == 'yes':
 
@@ -359,13 +362,9 @@ def login_to_connect(sock):
                 print(f'received_password : {received_password}')
                 if received_password == PASSWORD:
                     send_data(command_client_socket, 2, bytes("1", "utf-8"))
-                    connection_time =datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message = f"Connection from {address[0]} established at {connection_time}\n"
-
-                    # Write the log message to a file
-                    with open("connection_log.txt", "a") as file:
-                        file.write(log_message)
-
+                    dataBase()
+                   
+                                
                     print("\n")
                     print(f"Connection from {address[0]} has been connected!")
                     
@@ -404,7 +403,28 @@ def login_to_connect(sock):
     except (ConnectionAbortedError, ConnectionResetError, OSError):
         label_status.configure(font=normal_font, text="Not Connected", image=red)
 
+def dataBase():
+    
+  # Connect to the SQLite database
+    conn = sqlite3.connect('server_data.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+                CREATE TABLE IF NOT EXISTS connections_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                connection_time TEXT NOT NULL,
+                log_message TEXT NOT NULL
+                )
+                ''')
+    
+    connection_time =datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"Connection from {client_address} established at {connection_time}\n"
 
+    # Save the connection log data in the database
+    cursor.execute('INSERT INTO connections_log (connection_time,log_message) VALUES (?,?)', (connection_time,log_message))
+    conn.commit()
+    cursor.close()
+    
 def listinging_commands():
     global login_thread, IS_CLIENT_CONNECTED
     listen = True
@@ -455,41 +475,59 @@ def screen_sending_client():
 
     process2 = Process(target=take_from_list_and_send, args=(screenshot_sync_queue, client_socket_remote), daemon=True)
     process2.start()
-    
-    
 
- 
+
 forbidden_extensions = [".exe", ".dll"]
+
+def save_file_received_log(filename, data):
+    # Connect to the SQLite database
+    conn = sqlite3.connect('server_data.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS file_received_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            receive_time TEXT NOT NULL,
+            client_address TEXT NOT NULL,
+            file_data BLOB
+        )
+    ''')
+    
+    receive_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('INSERT INTO file_received_logs (client_address, filename, receive_time, file_data) VALUES (?,?,?,?)',
+                   (client_address, filename, receive_time, data))
+    conn.commit()
+    cursor.close()
+
 def receive_files():
-    # Create a directory for receiving files (if not already present)
-    directory = os.path.join(os.getcwd(), 'Received')
-    os.makedirs(directory, exist_ok=True)
     filename = file_client_socket.recv(1024).decode()
-    print('filename---',filename)
-    destination = os.path.join(directory, filename)
-   
+    print('filename:', filename)
+
     extension = os.path.splitext(filename)[1].lower()
     if extension in forbidden_extensions:
         # Ask for confirmation to download forbidden file types
-        result = messagebox.askquestion("Download File", f"Are you sure you want to download the file: {filename}?\nDownloading forbidden file types (.exe, .dll) can be risky.")
+        result = messagebox.askquestion("Download File",
+                                        f"Are you sure you want to download the file: {filename}?\nDownloading forbidden file types (.exe, .dll) can be risky.")
         if result != "yes":
             print(f"Skipping file: {filename}")
             return
-    
-    with open(destination, 'wb') as file:
-        data = file_client_socket.recv(1024)
-        file.write(data)
-    print('File successfully received:', filename)
-    connection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    log_message = f"{filename} File successfully received from {socket.gethostbyname(socket.gethostname())} at {connection_time}\n"
 
-    # Write the log message to a file
-    with open("connection_log.txt", "a") as file:
-        file.write(log_message)   
+    # Receive the file data
+    file_data = b""
+    # while True:
+    data = file_client_socket.recv(1024)
+        # if not data:
+        #     break
+    file_data += data
+    # Save the file received log with time, client IP, and file data
+    save_file_received_log(filename,data)
+    
     messagebox.showinfo("File Received", f"File '{filename}' received successfully!")
 
-def add_chat_display(msg,name):
-    current_time = datetime.now().strftime("%H:%M")
+
+
+def add_chat_display(msg,name,current_time):
     formatted_message = f"{msg} \n {current_time}"
     text_chat_tab.configure(state=tk.NORMAL)
     text_chat_tab.insert(tk.END, "\n")
@@ -505,7 +543,12 @@ def send_message():
             input_text_widget.delete(0, "end")
             
             send_data(chat_client_socket, CHAT_HEADER_SIZE, bytes(msg, "utf-8"))
-            add_chat_display(msg, LOCAL_NAME)
+            
+            current_time = datetime.now().strftime("%H:%M:%S")
+            add_chat_display(msg, LOCAL_NAME, current_time)
+             # Save the message to the chat log file
+            save_chat_message(msg, LOCAL_NAME + ":", current_time)
+            
     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError, OSError) as e:
         print(e.strerror)
 
@@ -516,7 +559,14 @@ def receive_message():
             msg = data_recive(chat_client_socket, CHAT_HEADER_SIZE, bytes())[0].decode("utf-8")
             print("receive_message",msg)
 
-            add_chat_display(msg, REMOTE_NAME)
+            
+            current_time = datetime.now().strftime("%H:%M:%S")
+            add_chat_display(msg, REMOTE_NAME, current_time)
+
+            # Save the message to the chat log file
+            save_chat_message(msg, REMOTE_NAME + ":", current_time)
+
+            
             if not is_chat_window_open():
                 messagebox.showinfo("New Message", "You have a new message!")
             # text_chat_tab.tag_configure("green", foreground="green")
@@ -528,7 +578,29 @@ def receive_message():
 def is_chat_window_open():
     return chat_frame.winfo_exists() and chat_frame.winfo_viewable()
 
-
+# Function to save chat message in the database
+def save_chat_message(sender, message,timestamp):
+    conn = sqlite3.connect('server_data.db')
+    cursor = conn.cursor()
+    
+    # Create the table if it doesn't exist
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            sender TEXT ,
+            message TEXT  
+        )
+    ''')
+    
+    # Get the current timestamp
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # Insert the chat message with the timestamp into the table
+    cursor.execute('INSERT INTO chat_messages (timestamp,sender, message) VALUES (?, ?, ?)', (timestamp,sender,message))
+    
+    conn.commit()
+    conn.close()
         
 if __name__ == "__main__":
     

@@ -357,6 +357,26 @@ def reset_ui():
     connect_button.configure(state="normal")
     password_entry.delete(0, "end")
 
+def client_con_data():
+     # Connect to the SQLite database
+    conn = sqlite3.connect('client_data.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS client_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_date TEXT NOT NULL,
+            log_message TEXT NOT NULL
+        )
+    ''')
+    connection_date = datetime.now().strftime("%Y-%m-%d")
+    connection_time = datetime.now().strftime("%H:%M:%S")
+    log_message = f"Connection from {server_ip} established at {connection_time}\n"
+    cursor.execute('INSERT INTO client_connections (connection_date , log_message) VALUES (?,?)',
+                   (connection_date,log_message))
+    conn.commit()
+    cursor.close()
+
 
 def login_to_connect():
     global command_server_socket, remote_server_socket, thread1, server_ip, file_server_socket, f_thread, chat_server_socket
@@ -380,11 +400,8 @@ def login_to_connect():
                     password_entered_time = time.time()
                     thread1 = Thread(target=listen_for_commands, daemon=True)
                     thread1.start()
-                    connection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    log_message = f"Connection from {server_ip} established at {connection_time}\n"
-                     # Write the log message to a file
-                    with open("client_connection_log.txt", "a") as file:
-                        file.write(log_message)
+                  
+                    client_con_data()
 
                     
                     print("\n")
@@ -495,7 +512,29 @@ def listen_for_commands():
 
 def file_path_listbox(event):
     listbox.insert(tk.END, event.data)
+    
 
+
+def save_file_send_log(filename, data):
+    # Connect to the SQLite database
+    conn = sqlite3.connect('client_data.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS file_send_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT NOT NULL,
+            send_time TEXT NOT NULL,
+            server_ip TEXT NOT NULL,
+            file_data BLOB
+        )
+    ''')
+
+    send_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cursor.execute('INSERT INTO file_send_logs (server_ip, filename, send_time, file_data) VALUES (?,?,?,?)',
+                   (server_ip, filename, send_time, data))
+    conn.commit()
+    cursor.close()
 
 forbidden_extensions = [".exe", ".dll"]
 
@@ -508,35 +547,36 @@ def send_files():
         for file in files:
             filename = os.path.basename(file)
             extension = os.path.splitext(filename)[1].lower()
-            
+
             if extension in forbidden_extensions:
                 # Ask for confirmation to send forbidden file types
                 result = messagebox.askquestion("Send File", f"Are you sure you want to send the file: {filename}?\nSending forbidden file types (.exe, .dll) can be risky.")
                 if result != "yes":
                     print(f"Skipping file: {filename}")
                     continue
-            
-            file_server_socket.send(filename.encode())
 
-            # Send the file
-            with open(file, "rb") as file:
-                while True:
-                    data = file.read(1024)
-                    if not data:
-                        break
-                    file_server_socket.send(data)
+            # Send the filename to the server
+            file_server_socket.send(filename.encode())
+              
+              # Read the file data
+            with open(file, "rb") as f:
+                data = f.read()
+
+            # Save the file send log with time, server IP, filename, and file data
+            save_file_send_log(filename, data)
+
+            # Send the file data
+            while data:
+                file_server_socket.send(data)
+                data = f.read(1024)
+            
             print(f"File sent: {file}")
 
         print("All files sent.")
-        connection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_message = f"{filename} File successfully sent at {connection_time}\n"
-
-        # Write the log message to a file
-        with open("client_connection_log.txt", "a") as file:
-            file.write(log_message) 
     else:
         print("No files selected.")
-        messagebox.showwarning("No File Selected", "Please select at least one file to send.")   
+        messagebox.showwarning("No File Selected", "Please select at least one file to send.")
+
 
 
         
@@ -671,35 +711,95 @@ def open_tweeter():
 def open_linkedin():
     webbrowser.open_new(r"https://www.linkedin.com/company/multispancontrolinstruments")
     print('hello linkedin')
+    
+def create_connection_table():
+    conn = sqlite3.connect('client_data.db')
+    cursor = conn.cursor()
 
+    cursor.execute('''CREATE TABLE IF NOT EXISTS client_connections
+                      (connection_date TEXT, log_message TEXT)''')
+
+    conn.commit()
+    cursor.close()
+    conn.close()  
+
+def create_file_table():
+    conn = sqlite3.connect('client_data.db')
+    cursor = conn.cursor()
+
+    cursor.execute('''CREATE TABLE IF NOT EXISTS file_send_logs
+                      (filename TEXT, send_time TEXT, server_ip TEXT,file_data BLOB)''')
+
+    conn.commit()
+    cursor.close()
+    conn.close()  
 def display_text_file():
-    # Check if the file exists
-    if not exists('client_connection_log.txt'):
-        # Create the file if it doesn't exist
-        with open('client_connection_log.txt', 'w') as file:
-            pass
+    
+    create_connection_table()
+    create_file_table()
+    
+    conn = sqlite3.connect('client_data.db')
+    cursor = conn.cursor()
 
-    # Read the content of the file
-    with open('client_connection_log.txt', 'r') as file:
-        content = file.read()
+    cursor.execute('SELECT connection_date, log_message FROM client_connections')
+    connection_rows = cursor.fetchall()
 
-    # Clear previous content in the Text widget
-    file_text.delete('1.0', tk.END)
+    cursor.execute('SELECT filename, send_time, server_ip FROM file_send_logs')
+    file_send_rows = cursor.fetchall()
 
-    # Insert the file content into the Text widget
-    file_text.insert(tk.END, content)
+    cursor.close()
+    conn.close()
+
+    tree.delete(*tree.get_children())
+
+    for i, (time, message) in enumerate(connection_rows):
+        if i % 2 == 0:
+            color = 'lightblue'
+        else:
+            color = 'white'
+        tree.insert('', tk.END, values=(time, message, "-", "-"), tags=(color,))
+
+    for i, (filename, send_time, server_ip) in enumerate(file_send_rows):
+        if i % 2 == 0:
+            color = 'lightblue'
+        else:
+            color = 'white'
+        tree.insert('', tk.END, values=(send_time, f"File '{filename}' sent from {server_ip}", filename, server_ip), tags=(color,))
+
+    tree.tag_configure('lightblue', background='lightblue')
+    tree.tag_configure('white', background='white')
+
+
+# def apply_filter():
+#     filter_text = search_entry.get().lower()
+
+#     # Clear previous filter results
+#     filter_text.tag_remove('highlight', '1.0', tk.END)
+
+#     # Apply the filter to file data
+#     file_content = filter_text.get('1.0', tk.END)
+#     filtered_indices = [(m.start(), m.end()) for m in re.finditer(re.escape(filter_text), file_content, re.IGNORECASE)]
+#     for start, end in filtered_indices:
+#         filter_text.tag_add('highlight', f'1.0+{start}c', f'1.0+{end}c')
+
+
 def apply_filter():
     filter_text = search_entry.get().lower()
 
     # Clear previous filter results
-    file_text.tag_remove('highlight', '1.0', tk.END)
+    tree.tag_remove('highlight', '1.0', tk.END)
 
     # Apply the filter to file data
-    file_content = file_text.get('1.0', tk.END)
+    file_content = tree.item(tree.focus())['values'][1]
     filtered_indices = [(m.start(), m.end()) for m in re.finditer(re.escape(filter_text), file_content, re.IGNORECASE)]
     for start, end in filtered_indices:
-        file_text.tag_add('highlight', f'1.0+{start}c', f'1.0+{end}c')
-        
+        tree.tag_add('highlight', f'1.0+{start}c', f'1.0+{end}c')
+
+
+     # Apply the tag configuration to highlight the text
+    tree.tag_configure('highlight', background='yellow')
+  
+
 
 def add_chat_display(msg, name,current_time):
     formatted_message = f"{msg} \n {current_time}"
@@ -751,7 +851,7 @@ def is_chat_window_open():
 
 # Function to save chat message in the database
 def save_chat_message(sender, message,timestamp):
-    conn = sqlite3.connect('chat_database.db')
+    conn = sqlite3.connect('client_data.db')
     cursor = conn.cursor()
     
     # Create the table if it doesn't exist
@@ -772,15 +872,6 @@ def save_chat_message(sender, message,timestamp):
     
     conn.commit()
     conn.close()
-
-# # File to save the chat messages
-# chat_log_file = "chat_log.txt"
-
-# def save_to_chat_log(msg,sender_name):
-#     current_time = datetime.now().strftime("%H:%M:%S")
-#     formatted_message = f"[{current_time}] {sender_name} {msg}"
-#     with open(chat_log_file, "a") as file:
-#         file.write(formatted_message + "\n")
         
      
 if __name__ == "__main__":
@@ -841,7 +932,7 @@ if __name__ == "__main__":
     # logo_image = tk.PhotoImage(file='assets/images/img/multispan-logo.png')\
     logo_image = tk.PhotoImage(file='assets/img/multispan-logo.png')
         
-    logo_label = tk.Label(frame1, image=logo_image, bg='#f2f2f2')
+    logo_label = tk.Label(frame1, image=logo_image)
     logo_label.place(x=60, y=40)
     # logo_label.pack(expand=True)
 
@@ -1174,7 +1265,7 @@ if __name__ == "__main__":
 
     # Create a load button
     load_img = tk.PhotoImage(file='assets/refresh-buttons.png')
-    load_button = tk.Button(search_container2,image=load_img, bg="#8A8A8A", activebackground='#8A8A8A',relief='flat', borderwidth=0, command=display_text_file)
+    load_button = tk.Button(search_container2,image=load_img, bg="#8A8A8A", activebackground='#8A8A8A',relief='flat', borderwidth=0,command=display_text_file )
     load_button.pack(padx=10,pady=5)
     
     
@@ -1196,21 +1287,30 @@ if __name__ == "__main__":
     logout2.config(command=lambda:show_frame(frame1))
     logout2.pack()
 
-    # Create a frame for the text
-    text_frame = tk.Frame(frame4)
-    text_frame.pack(fill=tk.BOTH, expand=True)
+    # Create a frame Treeview widget
+    tree = ttk.Treeview(frame4)
+    tree['columns'] = ('Connection Data', 'Log Message')
 
-    # Create a Text widget for file data
-    file_text = tk.Text(text_frame, font=('arial',12), wrap=tk.WORD)
-    file_text.pack(fill=tk.BOTH,expand=True)
+    # Define column names and widths
+    tree.column('#0', width=0, stretch=tk.NO)
+    tree.column('Connection Data', width=150, anchor=tk.CENTER)
+    tree.column('Log Message', width=400, anchor=tk.W)
+    tree.configure(padding=5)
+    # Add column headers
+    tree.heading('#0', text='')
+    tree.heading('Connection Data', text='Connection Data')
+    tree.heading('Log Message', text='Log Message')
+  
+    # Pack the Treeview widget
+    tree.pack(side=tk.TOP ,fill='both', expand=True)
     
-    # Center the text in the frame
-    file_text.tag_configure('center', justify='center')
-    file_text.insert(tk.END, "Text to be displayed in the center of the frame", 'center')
+   # Adjust row height
+    tree.configure(height=10)  # Set the desired row height here
 
-    # Add a tag for highlighting filtered text
-    file_text.tag_configure('highlight', background='yellow')
-    
+    # Add padding between rows
+    style = ttk.Style()
+    style.configure("Treeview", rowheight=30)  # Set the desired padding height here
+
     paragraph3 = tk.Label(frame4, text='Copyright © 2023 Multispan India. All rights reserved', font=('Rubik', 10), fg='gray', bg='#f2f2f2')
     paragraph3.pack(anchor=tk.CENTER)
 
